@@ -11,22 +11,65 @@
 static const char *TAG = "HELLO_S3";
 
 #define LED_GPIO            (48)
-#define SAMPLE_RATE         (48000)
+#define SAMPLE_RATE         (44100)
 #define FADE_MILLISECONDS   (6)
 #define FADE_SAMPLES        (SAMPLE_RATE * FADE_MILLISECONDS / 1000)
+#define TONE_TARGET_FREQ    (700)
+#define TONE_PERIOD         (SAMPLE_RATE / TONE_TARGET_FREQ)
 #define I2S_BCLK            GPIO_NUM_17
 #define I2S_LRCLK           GPIO_NUM_18
 #define I2S_DOUT            GPIO_NUM_16
 
-static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
+static float tone_buffer[TONE_PERIOD];
+
+typedef struct {
+	int phase_index;
+	int period;
+	float freq;
+	int sample_rate;
+	const float * buffer;
+} tone_generator;
+
+static tone_generator generator;
+
+void init_tone_generator(tone_generator * tg, int period, int sample_rate, const float * buffer)
+{
+	tg->phase_index = 0;
+	tg->period      = period;
+	tg->sample_rate = sample_rate;
+	tg->freq        = (float) sample_rate / (float) period;
+	tg->buffer      = buffer;
+}
+
+float tone_generator_next_value(tone_generator * tg)
+{
+	float result = tg->buffer[tg->phase_index];
+	tg->phase_index = (tg->phase_index + 1) % tg->period;
+	return result;
+}
+
+
+void initToneBuffer()
+{
+	for (int i = 0; i < TONE_PERIOD; i++)
+	{
+		tone_buffer[i] = sin(2 * M_PI * i / TONE_PERIOD);
+	}
+}
+
+void initToneGenerator()
+{
+	initToneBuffer();
+	init_tone_generator(&generator, TONE_PERIOD, SAMPLE_RATE, tone_buffer);
+}
+
+static void play_tone(tone_generator * tg, int ms, float gainDb, float fadeTimeMs)
 {
 
     ESP_LOGI(TAG, "play_tone()");
     CubicCurve cc;
 
     setCubicCurve( &cc, 0.0f, 1.0f, 0, FADE_SAMPLES);
-    
-    const float freq = freqHz;
 
     const float gainRatio = dbToRatio(gainDb, -120.0f);
     const int samples = SAMPLE_RATE * ms / 1000;
@@ -61,13 +104,9 @@ static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
         
         if (i + n > samples) n = samples - i;
         for (int j = 0; j < n; j++) {
-            c = nextCubicCurveValue(&cc);
+            buffer[j] = (int16_t)(gainRatio * tone_generator_next_value(&generator) * nextCubicCurveValue(&cc) * 32767);
 
-            //ESP_LOGI(TAG, "curve value: %f", c);
-
-            buffer[j] = (int16_t)(gainRatio * sin(2 * M_PI * freq * (i + j) / SAMPLE_RATE) * 32767) * c;
-
-            if (i+j == FADE_SAMPLES)
+            if (i + j >= FADE_SAMPLES && cc.stopCounter == 0)
             {
                 ESP_LOGI(TAG, "setCubicCurve");
                 setCubicCurve(&cc, 1.0f, 0.0f, samples - FADE_SAMPLES - FADE_SAMPLES, FADE_SAMPLES);
@@ -109,23 +148,25 @@ void app_main(void)
     led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &strip);
     led_strip_clear(strip);
 
+    initToneGenerator();
+
     while (1) {
         // Red
         led_strip_set_pixel(strip, 0, 64, 0, 0);
         led_strip_refresh(strip);
-        play_tone(700, 200, -40.0f, 50);
+        play_tone(&generator, 200, -50.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Green
         led_strip_set_pixel(strip, 0, 0, 64, 0);
         led_strip_refresh(strip);
-        play_tone(700, 200, -40.0f, 50);
+        play_tone(&generator, 200, -50.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Blue
         led_strip_set_pixel(strip, 0, 0, 0, 64);
         led_strip_refresh(strip);
-        play_tone(700, 200, -40.0f, 50);
+        play_tone(&generator, 200, -50.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Off
