@@ -10,12 +10,13 @@
 
 static const char *TAG = "HELLO_S3";
 
-#define LED_GPIO        48
-#define SAMPLE_RATE     44100
-#define FADE_SAMPLES    (SAMPLE_RATE / 50)
-#define I2S_BCLK        GPIO_NUM_17
-#define I2S_LRCLK       GPIO_NUM_18
-#define I2S_DOUT        GPIO_NUM_16
+#define LED_GPIO            (48)
+#define SAMPLE_RATE         (48000)
+#define FADE_MILLISECONDS   (6)
+#define FADE_SAMPLES        (SAMPLE_RATE * FADE_MILLISECONDS / 1000)
+#define I2S_BCLK            GPIO_NUM_17
+#define I2S_LRCLK           GPIO_NUM_18
+#define I2S_DOUT            GPIO_NUM_16
 
 static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
 {
@@ -55,9 +56,9 @@ static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
     i2s_channel_enable(tx_chan);
 
     float c = 0.0f;
-
+    int n = sizeof(buffer) / sizeof(buffer[0]);
     for (int i = 0; i < samples; ) {
-        int n = sizeof(buffer) / sizeof(buffer[0]);
+        
         if (i + n > samples) n = samples - i;
         for (int j = 0; j < n; j++) {
             c = nextCubicCurveValue(&cc);
@@ -75,6 +76,16 @@ static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
         size_t written;
         i2s_channel_write(tx_chan, buffer, n * sizeof(int16_t), &written, portMAX_DELAY);
         i += n;
+    }
+
+    for (int i=0; i< 10; i++)
+    {
+        // Write a silence buffer at the end to eliminate pops on close.
+        for (int j = 0; j < n; j++) {
+            buffer[j] = 0;
+        }
+        size_t written;
+        i2s_channel_write(tx_chan, buffer, n * sizeof(int16_t), &written, portMAX_DELAY);
     }
 
     ESP_LOGI(TAG, "Final curve value: %f", c);
@@ -102,19 +113,19 @@ void app_main(void)
         // Red
         led_strip_set_pixel(strip, 0, 64, 0, 0);
         led_strip_refresh(strip);
-        play_tone(700, 500, -40.0f, 50);
+        play_tone(700, 200, -40.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Green
         led_strip_set_pixel(strip, 0, 0, 64, 0);
         led_strip_refresh(strip);
-        play_tone(700, 500, -40.0f, 50);
+        play_tone(700, 200, -40.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Blue
         led_strip_set_pixel(strip, 0, 0, 0, 64);
         led_strip_refresh(strip);
-        play_tone(700, 500, -40.0f, 50);
+        play_tone(700, 200, -40.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Off
