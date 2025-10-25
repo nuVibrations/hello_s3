@@ -3,103 +3,28 @@
 #include "led_strip.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_log.h"
+#include "cubic_curve.h"
+#include "db_utils.h"
 #include <math.h>
+
+static const char *TAG = "HELLO_S3";
 
 #define LED_GPIO        48
 #define SAMPLE_RATE     44100
+#define FADE_SAMPLES    (SAMPLE_RATE / 50)
 #define I2S_BCLK        GPIO_NUM_17
 #define I2S_LRCLK       GPIO_NUM_18
 #define I2S_DOUT        GPIO_NUM_16
 
-typedef struct {
-	float d0;
-	float d1;
-	float d2;
-	float d3;
-
-	float target;
-	size_t startCounter;
-	size_t stopCounter;
-} CubicCurve;
-
-void setCubicCurve(CubicCurve* cc,
-                   float startTarget,
-                   float stopTarget,
-                   int   preDelaySamples,
-                   int   curveSamples)
-{
-    if (curveSamples <= 0) curveSamples = 1;
-
-    const float h = 1.0f / (float)curveSamples;
-    const float delta = stopTarget - startTarget;
-
-    // Cubic coefficients in normalized domain [0,1]
-    const float a = startTarget;
-    const float b = 1.0f;
-    const float c = 3.0f * (delta - 1.0f);
-    const float d = -2.0f * (delta - 1.0f);
-
-    // Convert to forward-difference coefficients
-    cc->d0 = a;
-    cc->d1 = b * h + c * h * h + d * h * h * h;
-    cc->d2 = 2.0f * c * h * h + 6.0f * d * h * h * h;
-    cc->d3 = 6.0f * d * h * h * h;
-
-    cc->target       = stopTarget;
-    cc->startCounter = preDelaySamples > 0 ? preDelaySamples : 0;
-    cc->stopCounter  = curveSamples > 0 ? curveSamples : 1;
-}
-
-float nextCubicCurveValue( CubicCurve * cc)
-{
-	float d0 = cc->d0;
-
-	if (cc->startCounter > 0)
-	{
-		cc->startCounter--;
-	}
-	else if (cc->stopCounter > 0)
-	{
-		cc->d0 += cc->d1;
-		cc->d1 += cc->d2;
-		cc->d2 += cc->d3;
-		
-		cc->stopCounter--;
-	}
-
-	return d0;
-}
-
-
-float dbToRatio(float db, float floor)
-{
-	if (db == floor)
-	{
-		return 0.0f;
-	}
-
-	float ratio = pow(10, db/20.0f);
-	return ratio;
-}
-
-float ratioToDb(float ratio, float floor)
-{
-	if (0.0 == ratio)
-	{
-		return floor;
-	}
-
-	float dB = 20.0f * log(ratio);
-	if (dB < floor)
-	{
-		dB = floor;
-	}
-
-	return dB;
-}
-
 static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
 {
+
+    ESP_LOGI(TAG, "play_tone()");
+    CubicCurve cc;
+
+    setCubicCurve( &cc, 0.0f, 1.0f, 0, FADE_SAMPLES);
+    
     const float freq = freqHz;
 
     const float gainRatio = dbToRatio(gainDb, -120.0f);
@@ -129,15 +54,31 @@ static void play_tone(float freqHz, int ms, float gainDb, float fadeTimeMs)
     i2s_channel_init_std_mode(tx_chan, &std_cfg);
     i2s_channel_enable(tx_chan);
 
+    float c = 0.0f;
+
     for (int i = 0; i < samples; ) {
         int n = sizeof(buffer) / sizeof(buffer[0]);
         if (i + n > samples) n = samples - i;
-        for (int j = 0; j < n; j++)
-            buffer[j] = (int16_t)(gainRatio * sin(2 * M_PI * freq * (i + j) / SAMPLE_RATE) * 32767);
+        for (int j = 0; j < n; j++) {
+            c = nextCubicCurveValue(&cc);
+
+            //ESP_LOGI(TAG, "curve value: %f", c);
+
+            buffer[j] = (int16_t)(gainRatio * sin(2 * M_PI * freq * (i + j) / SAMPLE_RATE) * 32767) * c;
+
+            if (i+j == FADE_SAMPLES)
+            {
+                ESP_LOGI(TAG, "setCubicCurve");
+                setCubicCurve(&cc, 1.0f, 0.0f, samples - FADE_SAMPLES - FADE_SAMPLES, FADE_SAMPLES);
+            }
+        }
         size_t written;
         i2s_channel_write(tx_chan, buffer, n * sizeof(int16_t), &written, portMAX_DELAY);
         i += n;
     }
+
+    ESP_LOGI(TAG, "Final curve value: %f", c);
+
 
     i2s_channel_disable(tx_chan);
     i2s_del_channel(tx_chan);
@@ -161,19 +102,19 @@ void app_main(void)
         // Red
         led_strip_set_pixel(strip, 0, 64, 0, 0);
         led_strip_refresh(strip);
-        play_tone(700, 200, -30.0f, 50);
+        play_tone(700, 500, -40.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Green
         led_strip_set_pixel(strip, 0, 0, 64, 0);
         led_strip_refresh(strip);
-        play_tone(700, 200, -30.0f, 50);
+        play_tone(700, 500, -40.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Blue
         led_strip_set_pixel(strip, 0, 0, 0, 64);
         led_strip_refresh(strip);
-        play_tone(700, 200, -30.0f, 50);
+        play_tone(700, 500, -40.0f, 50);
         vTaskDelay(pdMS_TO_TICKS(500));
 
         // Off
